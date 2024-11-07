@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>AML Transaction Monitoring - Generate Predictions</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="container">
+    <h1>AML Transaction Monitoring</h1>
+    <h2>Generate Predictions</h2>
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}
+        <div class="alert">
+          {% for message in messages %}
+            <p>{{ message }}</p>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+    <form action="{{ url_for('generate_predictions') }}" method="post" enctype="multipart/form-data">
+      <div class="form-group">
+        <label for="file">Upload a CSV file:</label>
+        <input type="file" id="file" name="file" required>
+      </div>
+      <button type="submit" class="btn">Generate Predictions</button>
+    </form>
+    {% if predictions %}
+      <div class="prediction-container">
+        <h3>Prediction Results</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Timestamp</th>
+              <th>From Bank</th>
+              <th>From Account</th>
+              <th>To Bank</th>
+              <th>To Account</th>
+              <th>Amount Received</th>
+              <th>Receiving Currency</th>
+              <th>Amount Paid</th>
+              <th>Payment Currency</th>
+              <th>Payment Format</th>
+              <th>Risk Score</th>
+              <th>Is Suspicious</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for prediction in predictions %}
+              <tr>
+                <td>{{ prediction['Timestamp'] }}</td>
+                <td>{{ prediction['grid_3x3From Bank'] }}</td>
+                <td>{{ prediction['text_formatAccount'] }}</td>
+                <td>{{ prediction['grid_3x3To Bank'] }}</td>
+                <td>{{ prediction['text_formatAccount.1'] }}</td>
+                <td>{{ prediction['grid_3x3Amount Received'] }}</td>
+                <td>{{ prediction['text_formatReceiving Currency'] }}</td>
+                <td>{{ prediction['grid_3x3Amount Paid'] }}</td>
+                <td>{{ prediction['text_formatPayment Currency'] }}</td>
+                <td>{{ prediction['text_formatPayment Format'] }}</td>
+                <td>{{ prediction['risk_score'] }}</td>
+                <td>{{ 'Yes' if prediction['is_suspicious'] else 'No' }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endif %}
+    <a href="{{ url_for('dashboard') }}" class="btn">Back to Dashboard</a>
+  </div>
+</body>
+</html>

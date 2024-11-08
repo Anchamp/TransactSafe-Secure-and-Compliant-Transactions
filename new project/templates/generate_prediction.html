@@ -1,13 +1,16 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AML Transaction Monitoring - Generate Predictions</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="static/generate_prediction.css">
 </head>
 <body>
   <div class="container">
     <h1>AML Transaction Monitoring</h1>
     <h2>Generate Predictions</h2>
+
     {% with messages = get_flashed_messages() %}
       {% if messages %}
         <div class="alert">
@@ -17,6 +20,7 @@
         </div>
       {% endif %}
     {% endwith %}
+
     <form action="{{ url_for('generate_predictions') }}" method="post" enctype="multipart/form-data">
       <div class="form-group">
         <label for="file">Upload a CSV file:</label>
@@ -24,9 +28,10 @@
       </div>
       <button type="submit" class="btn">Generate Predictions</button>
     </form>
-    {% if predictions %}
-      <div class="prediction-container">
-        <h3>Prediction Results</h3>
+
+    <div class="prediction-container">
+      <h3>Prediction Results</h3>
+      <div class="table-responsive">
         <table>
           <thead>
             <tr>
@@ -64,8 +69,9 @@
           </tbody>
         </table>
       </div>
-    {% endif %}
+    </div>
     <a href="{{ url_for('dashboard') }}" class="btn">Back to Dashboard</a>
+    
   </div>
 </body>
 </html>

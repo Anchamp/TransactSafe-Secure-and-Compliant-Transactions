@@ -2,7 +2,7 @@
 <html>
 <head>
   <title>AML Transaction Monitoring - Dashboard</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="static/dashboard.css">
 </head>
 <body>
   <div class="container">
@@ -11,6 +11,7 @@
     <div class="alert-container">
       <h3>Recent Alerts</h3>
       {% if alerts %}
+      <div class="table-container">
         <table>
           <thead>
             <tr>
@@ -45,6 +46,7 @@
             {% endfor %}
           </tbody>
         </table>
+      </div>
       {% else %}
         <p>No recent alerts.</p>
       {% endif %}

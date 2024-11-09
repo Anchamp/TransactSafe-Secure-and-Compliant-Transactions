@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AML Transaction Monitoring - Generate Predictions</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='generate.css') }}">
+</head>
+<body>
+    <div class="container">
+        <nav class="navbar">
+            <div class="nav-brand">AML Monitoring System</div>
+            <div class="nav-links">
+                <a href="{{ url_for('dashboard') }}" class="nav-link">Dashboard</a>
+                <a href="{{ url_for('generate_predictions') }}" class="nav-link active">Generate Predictions</a>
+                <a href="{{ url_for('logout') }}" class="nav-link">Logout</a>
+            </div>
+        </nav>
+
+        <div class="content">
+            <h1>Generate Predictions</h1>
+
+            {% with messages = get_flashed_messages() %}
+                {% if messages %}
+                    {% for message in messages %}
+                        <div class="alert alert-warning">
+                            {{ message }}
+                        </div>
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
+
+            <div class="upload-section">
+                <div class="card">
+                    <h2>Upload Transaction Data</h2>
+                    <form action="{{ url_for('generate_predictions') }}" method="post" enctype="multipart/form-data">
+                        <div class="form-group">
+                            <label for="file">Select CSV File:</label>
+                            <input type="file" id="file" name="file" accept=".csv" required>
+                        </div>
+                        <button type="submit" class="btn">Generate Predictions</button>
+                    </form>
+                </div>
+            </div>
+
+            <div class="format-guide">
+                <div class="card">
+                    <h2>Required CSV Format</h2>
+                    <div class="table-responsive">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Timestamp</th>
+                                    <th>From Bank</th>
+                                    <th>To Bank</th>
+                                    <th>Amount</th>
+                                    <th>Currency</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td>2024-03-15 10:30:00</td>
+                                    <td>Bank A</td>
+                                    <td>Bank B</td>
+                                    <td>1000.00</td>
+                                    <td>USD</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            {% if predictions %}
+                <div class="results-section">
+                    <div class="card">
+                        <h2>Prediction Results</h2>
+                        <div class="table-responsive">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Timestamp</th>
+                                        <th>From Bank</th>
+                                        <th>To Bank</th>
+                                        <th>Amount</th>
+                                        <th>Risk Score</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for prediction in predictions %}
+                                        <tr class="{% if prediction.get('risk_score', 0) > 0.8 %}high-risk{% elif prediction.get('risk_score', 0) > 0.6 %}medium-risk{% endif %}">
+                                            <td>{{ prediction.Timestamp }}</td>
+                                            <td>{{ prediction.get('From Bank', 'N/A') }}</td>
+                                            <td>{{ prediction.get('To Bank', 'N/A') }}</td>
+                                            <td>${{ "{:,.2f}".format(prediction.get('Amount', 0)) }}</td>
+                                            <td>{{ "%.2f"|format(prediction.get('risk_score', 0)) }}</td>
+                                            <td>
+                                                <span class="status-badge {% if prediction.get('risk_score', 0) > 0.8 %}high-risk{% elif prediction.get('risk_score', 0) > 0.6 %}medium-risk{% else %}low-risk{% endif %}">
+                                                    {% if prediction.get('risk_score', 0) > 0.8 %}
+                                                        High Risk
+                                                    {% elif prediction.get('risk_score', 0) > 0.6 %}
+                                                        Medium Risk
+                                                    {% else %}
+                                                        Low Risk
+                                                    {% endif %}
+                                                </span>
+                                            </td>
+                                        </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            {% endif %}
+        </div>
+    </div>
+</body>
+</html>

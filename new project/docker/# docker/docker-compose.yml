@@ -1,0 +1,51 @@
+# docker/docker-compose.yml
+version: '3.8'
+
+services:
+  hbase:
+    image: harisekhon/hbase:1.4
+    container_name: hbase
+    ports:
+      - "9090:9090"  # HBase Thrift server
+      - "9095:9095"  # HBase REST server
+      - "2181:2181"  # ZooKeeper
+      - "16010:16010"  # HBase Master web UI
+    environment:
+      - HBASE_MASTER_PORT=16000
+      - HBASE_MASTER_INFO_PORT=16010
+      - HBASE_REGIONSERVER_PORT=16020
+      - HBASE_REGIONSERVER_INFO_PORT=16030
+      - HBASE_ZOOKEEPER_QUORUM=localhost
+      - HBASE_MANAGES_ZK=true
+    volumes:
+      - ./hbase/conf:/hbase/conf
+      - hbase_data:/hbase/data
+    networks:
+      - aml_network
+
+  app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: aml-apps
+    ports:
+      - "5000:5000"
+    depends_on:
+      - hbase
+    environment:
+      - HBASE_HOST=hbase
+      - FLASK_ENV=development
+      - FLASK_APP=apps.main:apps
+      - PYTHONPATH=/apps
+    volumes:
+      - ../apps:/apps
+      - ../data:/data
+    networks:
+      - aml_network
+
+networks:
+  aml_network:
+    driver: bridge
+
+volumes:
+  hbase_data:

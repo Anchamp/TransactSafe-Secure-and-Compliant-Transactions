@@ -1,96 +1,46 @@
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
-from datetime import datetime
+from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np
 import os
 import logging
 import joblib
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional
 import traceback
 
-# Initialize Flask app
-app = Flask(__name__)
-app.config['SECRET_KEY'] = 'your-secret-key-here'  # Change in production
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
-app.config['UPLOAD_FOLDER'] = 'uploads'
 
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('app.log'),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
-
-# Initialize Flask-Login
-login_manager = LoginManager()
-login_manager.init_app(app)
-login_manager.login_view = 'login'
-
-# Create necessary directories
-for directory in ['data', 'models', 'templates', 'static', 'uploads']:
-    Path(directory).mkdir(exist_ok=True)
+class Config:
+    """Application configuration"""
+    SECRET_KEY = 'your-secret-key-here'  # Change in production
+    MAX_CONTENT_LENGTH = 4 * 1024 * 1024 * 1024  # 4GB max file size
+    UPLOAD_FOLDER = 'uploads'
+    ALERTS_FILE = 'data/alerts.csv'
+    MODEL_PATH = 'models/aml_detector.joblib'
 
 
+# User class for Flask-Login
 class User(UserMixin):
-    def __init__(self, user_id: str):
+    def __init__(self, user_id):
         self.id = user_id
 
 
 # In-memory user store (replace with database in production)
 users = {}
 
-
-class TransactionValidator:
-    """Validates transaction data format and content"""
-    REQUIRED_COLUMNS = {
-        'Timestamp': str,
-        'From Bank': str,
-        'To Bank': str,
-        'Amount': float,
-        'Currency': str
-    }
-
-    @staticmethod
-    def validate_csv(file) -> tuple[bool, str, Optional[pd.DataFrame]]:
-        """Validates uploaded CSV file and its contents"""
-        try:
-            if not file.filename.endswith('.csv'):
-                return False, "Invalid file type. Please upload a CSV file.", None
-
-            df = pd.read_csv(file)
-
-            # Check required columns
-            missing_cols = [col for col in TransactionValidator.REQUIRED_COLUMNS if col not in df.columns]
-            if missing_cols:
-                return False, f"Missing required columns: {', '.join(missing_cols)}", None
-
-            # Validate data types
-            for col, dtype in TransactionValidator.REQUIRED_COLUMNS.items():
-                if col == 'Amount':
-                    df[col] = pd.to_numeric(df[col], errors='coerce')
-                    if df[col].isna().any():
-                        return False, f"Invalid amount values found in the {col} column", None
-                elif col == 'Timestamp':
-                    try:
-                        df[col] = pd.to_datetime(df[col])
-                    except:
-                        return False, f"Invalid timestamp format in the {col} column", None
-
-            return True, "", df
-
-        except Exception as e:
-            logger.error(f"Error validating CSV: {str(e)}")
-            return False, f"Error processing file: {str(e)}", None
+# Processing status tracker
+processing_status = {
+    'is_processing': False,
+    'current_chunk': 0,
+    'total_chunks': 0,
+    'status_message': '',
+    'error': None
+}
 
 
 class ModelManager:
-    """Manages model loading and prediction operations"""
+    """Manages ML model operations"""
 
     def __init__(self):
         self.model = None
@@ -98,123 +48,67 @@ class ModelManager:
         self._initialize_model()
 
     def _initialize_model(self):
-        """Initialize model with dummy if real model not available"""
         try:
-            if os.path.exists('models/model.joblib'):
-                self.model, self.preprocessor = joblib.load('models/model.joblib')
+            if os.path.exists(Config.MODEL_PATH):
+                self.model = joblib.load(Config.MODEL_PATH)
+                logging.info("Loaded production model")
             else:
-                logger.warning("Using dummy model for testing")
+                logging.warning("Using dummy model for testing")
                 self.model = type('DummyModel', (), {
-                    'predict_proba': lambda self, X: np.random.uniform(0, 1, (len(X), 2))
-                })()
-                self.preprocessor = type('DummyPreprocessor', (), {
-                    'transform': lambda self, X: X
+                    'predict': lambda self, X: (np.random.uniform(0, 1, len(X)),
+                                                {'model1': np.random.uniform(0, 1, len(X))}),
+                    'generate_report': lambda self, df, pred, scores: {
+                        'total_transactions': len(df),
+                        'high_risk_count': sum(pred > 0.7),
+                        'average_risk_score': float(np.mean(pred))
+                    }
                 })()
         except Exception as e:
-            logger.error(f"Error initializing model: {str(e)}")
+            logging.error(f"Error initializing model: {str(e)}")
             self.model = None
-            self.preprocessor = None
 
-    def predict(self, df: pd.DataFrame) -> tuple[bool, str, Optional[np.ndarray]]:
-        """Generate predictions for input data"""
+    def predict(self, df: pd.DataFrame) -> tuple[bool, str, Optional[np.ndarray], Optional[dict]]:
         try:
             if self.model is None:
-                return False, "Model not initialized", None
+                return False, "Model not initialized", None, None
 
-            # Preprocess data if preprocessor available
-            if self.preprocessor:
-                df = self.preprocessor.transform(df)
+            predictions, scores = self.model.predict(df)
+            report = self.model.generate_report(df, predictions, scores)
 
-            # Generate predictions
-            predictions = self.model.predict_proba(df)[:, 1]
-            return True, "", predictions
-
+            return True, "", predictions, report
         except Exception as e:
-            logger.error(f"Error generating predictions: {str(e)}")
-            return False, f"Error generating predictions: {str(e)}", None
+            return False, f"Error generating predictions: {str(e)}", None, None
 
 
-# Initialize model manager
-model_manager = ModelManager()
+def create_app():
+    """Application factory function"""
+    app = Flask(__name__)
+    app.config.from_object(Config)
 
+    # Setup logging
+    logging.basicConfig(level=logging.INFO)
 
-@login_manager.user_loader
-def load_user(user_id: str) -> Optional[User]:
-    return User(user_id) if user_id in users or user_id == "admin" else None
+    # Create required directories
+    for directory in ['data', 'models', 'uploads']:
+        Path(directory).mkdir(exist_ok=True)
 
+    # Initialize Flask-Login
+    login_manager = LoginManager()
+    login_manager.init_app(app)
+    login_manager.login_view = 'login'
 
-def save_predictions(df: pd.DataFrame, predictions: np.ndarray) -> None:
-    """Save predictions and high-risk transactions"""
-    try:
-        # Add predictions to dataframe
-        df['risk_score'] = predictions
-        df['is_suspicious'] = predictions > 0.7
+    # Initialize model manager
+    model_manager = ModelManager()
 
-        # Save all predictions
-        df.to_csv('data/fraudulent_predictions.csv', index=False)
+    @login_manager.user_loader
+    def load_user(user_id: str) -> Optional[User]:
+        """Required user loader function for Flask-Login"""
+        if user_id in users or user_id == "admin":
+            return User(user_id)
+        return None
 
-        # Save high-risk transactions as alerts
-        high_risk = df[df['risk_score'] > 0.7].copy()
-        if not high_risk.empty:
-            high_risk['alert_date'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-
-            # Append to existing alerts or create new file
-            alerts_path = 'data/alerts.csv'
-            if os.path.exists(alerts_path):
-                alerts_df = pd.read_csv(alerts_path)
-                alerts_df = pd.concat([alerts_df, high_risk])
-            else:
-                alerts_df = high_risk
-
-            alerts_df.to_csv(alerts_path, index=False)
-
-    except Exception as e:
-        logger.error(f"Error saving predictions: {str(e)}")
-        raise
-
-
-@app.route('/', methods=['GET', 'POST'])
-def login():
-    if request.method == 'POST':
-        username = request.form.get('username')
-        password = request.form.get('password')
-
-        if (username in users and users[username]['password'] == password) or \
-                (username == "admin" and password == "password"):
-            user = User(username)
-            login_user(user)
-            return redirect(url_for('dashboard'))
-
-        flash('Invalid credentials')
-    return render_template('login.html')
-
-
-@app.route('/register', methods=['GET', 'POST'])
-def register():
-    if request.method == 'POST':
-        username = request.form.get('username')
-        email = request.form.get('email')
-        password = request.form.get('password')
-
-        if username in users:
-            flash('Username already exists')
-            return redirect(url_for('register'))
-
-        users[username] = {
-            'email': email,
-            'password': password
-        }
-        flash('Registration successful! Please login.')
-        return redirect(url_for('login'))
-
-    return render_template('register.html')
-
-
-@app.route('/dashboard')
-@login_required
-def dashboard():
-    try:
-        # Initialize default values
+    def generate_dashboard_data():
+        """Generate data for dashboard visualization"""
         default_data = {
             'alerts': [],
             'summary': {
@@ -223,13 +117,13 @@ def dashboard():
                 'total_amount': 0.0,
                 'recent_alerts': 0
             },
-            'model_performance': {
-                'labels': ['Isolation Forest 1', 'Isolation Forest 2', 'LOF', 'DBSCAN'],
-                'scores': [0.85, 0.82, 0.78, 0.80]
-            },
             'risk_distribution': {
                 'labels': ['High Risk', 'Medium Risk', 'Low Risk'],
                 'values': [0, 0, 0]
+            },
+            'model_performance': {
+                'labels': ['Isolation Forest', 'LOF', 'DBSCAN'],
+                'scores': [0.85, 0.82, 0.78]
             },
             'trend_data': {
                 'dates': [],
@@ -237,128 +131,230 @@ def dashboard():
             }
         }
 
-        # Load and process alerts if file exists
-        if os.path.exists('data/alerts.csv'):
-            alerts_df = pd.read_csv('data/alerts.csv')
-            if not alerts_df.empty:
-                # Ensure all required columns exist
-                for col in ['Amount', 'risk_score', 'alert_date']:
-                    if col not in alerts_df.columns:
-                        alerts_df[col] = 0.0 if col == 'Amount' else (0.0 if col == 'risk_score' else '')
-
-                # Calculate summary metrics
-                default_data['summary'].update({
-                    'total_alerts': len(alerts_df),
-                    'high_risk_count': len(alerts_df[alerts_df['risk_score'] > 0.8]),
-                    'total_amount': float(alerts_df['Amount'].sum()),
-                    'recent_alerts': len(alerts_df[pd.to_datetime(alerts_df['alert_date']) >
-                        (pd.Timestamp.now() - pd.Timedelta(days=1))])
-                })
-
-                # Calculate risk distribution
-                default_data['risk_distribution']['values'] = [
-                    len(alerts_df[alerts_df['risk_score'] > 0.8]),
-                    len(alerts_df[(alerts_df['risk_score'] > 0.5) & (alerts_df['risk_score'] <= 0.8)]),
-                    len(alerts_df[alerts_df['risk_score'] <= 0.5])
-                ]
-
-                # Calculate trend data
-                alerts_df['alert_date'] = pd.to_datetime(alerts_df['alert_date'])
-                daily_alerts = alerts_df.groupby(alerts_df['alert_date'].dt.date).size().tail(7)
-                default_data['trend_data'].update({
-                    'dates': [d.strftime('%Y-%m-%d') for d in daily_alerts.index],
-                    'counts': daily_alerts.values.tolist()
-                })
-
-                # Prepare alerts for template
-                default_data['alerts'] = alerts_df.fillna('').to_dict('records')
-
-        return render_template(
-            'dashboard.html',
-            alerts=default_data['alerts'],
-            summary=default_data['summary'],
-            model_performance=default_data['model_performance'],
-            risk_distribution=default_data['risk_distribution'],
-            trend_data=default_data['trend_data']
-        )
-
-    except Exception as e:
-        logger.error(f"Error loading dashboard: {str(e)}")
-        flash('Error loading dashboard data')
-        return render_template(
-            'dashboard.html',
-            alerts=[],
-            summary={'total_alerts': 0, 'high_risk_count': 0, 'total_amount': 0.0, 'recent_alerts': 0},
-            model_performance={'labels': [], 'scores': []},
-            risk_distribution={'labels': [], 'values': []},
-            trend_data={'dates': [], 'counts': []}
-        )
-
-@app.route('/generate_predictions', methods=['GET', 'POST'])
-@login_required
-def generate_predictions():
-    if request.method == 'POST':
-        if 'file' not in request.files:
-            flash('No file uploaded')
-            return redirect(request.url)
-
-        file = request.files['file']
-        if file.filename == '':
-            flash('No file selected')
-            return redirect(request.url)
-
         try:
-            # Validate uploaded file
-            is_valid, message, df = TransactionValidator.validate_csv(file)
-            if not is_valid:
-                flash(message)
-                return redirect(request.url)
+            if not os.path.exists(Config.ALERTS_FILE):
+                return default_data
 
-            # Generate predictions
-            success, error_message, predictions = model_manager.predict(df)
-            if not success:
-                flash(error_message)
-                return redirect(request.url)
+            # Read CSV with proper type handling
+            alerts_df = pd.read_csv(Config.ALERTS_FILE, low_memory=False)
+            if alerts_df.empty:
+                return default_data
 
-            # Save predictions and alerts
-            save_predictions(df, predictions)
+            # Convert and clean data types
+            alerts_df['alert_date'] = pd.to_datetime(alerts_df['alert_date'], errors='coerce')
+            alerts_df['Amount'] = pd.to_numeric(alerts_df['Amount'], errors='coerce').fillna(0)
+            alerts_df['risk_score'] = pd.to_numeric(alerts_df['risk_score'], errors='coerce').fillna(0)
 
-            flash('Predictions generated successfully')
-            return render_template('generate_predictions.html',
-                                   predictions=df.to_dict('records'))
+            # Calculate recent alerts
+            now = datetime.now()
+            recent_mask = alerts_df['alert_date'] > (now - timedelta(days=1))
+
+            # Calculate risk levels
+            alerts_df['risk_level'] = 'Low Risk'
+            alerts_df.loc[alerts_df['risk_score'] > 0.7, 'risk_level'] = 'Medium Risk'
+            alerts_df.loc[alerts_df['risk_score'] > 0.85, 'risk_level'] = 'High Risk'
+
+            risk_counts = alerts_df['risk_level'].value_counts()
+
+            # Calculate daily trend
+            last_week = now - timedelta(days=7)
+            daily_counts = alerts_df[alerts_df['alert_date'] >= last_week].groupby(
+                alerts_df['alert_date'].dt.date
+            ).size()
+
+            # Create date range for complete week
+            date_range = pd.date_range(
+                start=last_week.date(),
+                end=now.date(),
+                freq='D'
+            )
+            daily_counts = daily_counts.reindex(date_range, fill_value=0)
+
+            # Prepare alerts for display
+            display_alerts = (
+                alerts_df.sort_values('alert_date', ascending=False)
+                .head(100)
+                .fillna('N/A')
+                .replace([np.inf, -np.inf], 0)
+            )
+
+            # Convert numeric columns to proper format
+            for alert in display_alerts.to_dict('records'):
+                if pd.notna(alert.get('Amount')):
+                    alert['Amount'] = float(alert['Amount'])
+                if pd.notna(alert.get('risk_score')):
+                    alert['risk_score'] = float(alert['risk_score'])
+
+            return {
+                'alerts': display_alerts.to_dict('records'),
+                'summary': {
+                    'total_alerts': len(alerts_df),
+                    'high_risk_count': int(sum(alerts_df['risk_score'] > 0.85)),
+                    'total_amount': float(alerts_df['Amount'].sum()),
+                    'recent_alerts': int(sum(recent_mask))
+                },
+                'risk_distribution': {
+                    'labels': ['High Risk', 'Medium Risk', 'Low Risk'],
+                    'values': [
+                        int(risk_counts.get('High Risk', 0)),
+                        int(risk_counts.get('Medium Risk', 0)),
+                        int(risk_counts.get('Low Risk', 0))
+                    ]
+                },
+                'model_performance': {
+                    'labels': ['Isolation Forest', 'LOF', 'DBSCAN'],
+                    'scores': [0.85, 0.82, 0.78]
+                },
+                'trend_data': {
+                    'dates': [d.strftime('%Y-%m-%d') for d in daily_counts.index],
+                    'counts': [int(x) for x in daily_counts.values]
+                }
+            }
 
         except Exception as e:
-            logger.error(f"Error in generate_predictions: {str(e)}\n{traceback.format_exc()}")
-            flash(f'An error occurred: {str(e)}')
-            return redirect(request.url)
+            logging.error(f"Error generating dashboard data: {str(e)}\n{traceback.format_exc()}")
+            return default_data
 
-    # GET request - display existing predictions if available
-    try:
-        predictions_df = pd.read_csv('data/fraudulent_predictions.csv') \
-            if os.path.exists('data/fraudulent_predictions.csv') else pd.DataFrame()
+    @app.route('/', methods=['GET', 'POST'])
+    def login():
+        if request.method == 'POST':
+            username = request.form.get('username')
+            password = request.form.get('password')
+
+            if ((username in users and users[username]['password'] == password) or
+                    (username == "admin" and password == "password")):
+                user = User(username)
+                login_user(user)
+                return redirect(url_for('generate_predictions'))
+
+            flash('Invalid credentials')
+        return render_template('login.html')
+
+    @app.route('/register', methods=['GET', 'POST'])
+    def register():
+        if request.method == 'POST':
+            username = request.form.get('username')
+            email = request.form.get('email')
+            password = request.form.get('password')
+
+            if not all([username, email, password]):
+                flash('All fields are required')
+                return redirect(url_for('register'))
+
+            if username in users:
+                flash('Username already exists')
+                return redirect(url_for('register'))
+
+            users[username] = {
+                'email': email,
+                'password': password
+            }
+            flash('Registration successful! Please login.')
+            return redirect(url_for('login'))
+
+        return render_template('register.html')
+
+    @app.route('/dashboard')
+    @login_required
+    def dashboard():
+        try:
+            data = generate_dashboard_data()
+            return render_template('dashboard.html', **data)
+        except Exception as e:
+            logging.error(f"Error in dashboard: {str(e)}\n{traceback.format_exc()}")
+            flash('Error loading dashboard data')
+            return render_template('dashboard.html', **generate_dashboard_data())
+        try:
+            dashboard_data = generate_dashboard_data()
+            if dashboard_data is None:
+                flash('Error loading dashboard data')
+                dashboard_data = {
+                    'alerts': [],
+                    'summary': {
+                        'total_alerts': 0,
+                        'high_risk_count': 0,
+                        'total_amount': 0.0,
+                        'recent_alerts': 0
+                    },
+                    'risk_distribution': {'labels': [], 'values': []},
+                    'trend_data': {'dates': [], 'counts': []}
+                }
+
+            return render_template('dashboard.html', **dashboard_data)
+        except Exception as e:
+            logging.error(f"Error in dashboard: {str(e)}")
+            flash('Error loading dashboard')
+            return redirect(url_for('login'))
+
+    @app.route('/generate_predictions', methods=['GET', 'POST'])
+    @login_required
+    def generate_predictions():
+        if request.method == 'POST':
+            if 'file' not in request.files:
+                flash('No file uploaded')
+                return redirect(request.url)
+
+            file = request.files['file']
+            if not file.filename:
+                flash('No file selected')
+                return redirect(request.url)
+
+            try:
+                df = pd.read_csv(file)
+                success, error_msg, predictions, report = model_manager.predict(df)
+
+                if not success:
+                    flash(error_msg)
+                    return redirect(request.url)
+
+                # Save alerts for high-risk transactions
+                high_risk_mask = predictions > 0.7
+                if high_risk_mask.any():
+                    alerts_df = df[high_risk_mask].copy()
+                    alerts_df['risk_score'] = predictions[high_risk_mask]
+                    alerts_df['alert_date'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+                    mode = 'a' if os.path.exists(Config.ALERTS_FILE) else 'w'
+                    alerts_df.to_csv(Config.ALERTS_FILE,
+                                     mode=mode,
+                                     header=(mode == 'w'),
+                                     index=False)
+
+                df['risk_score'] = predictions
+                flash('Predictions generated successfully')
+                return render_template(
+                    'generate_predictions.html',
+                    predictions=df.head(1000).to_dict('records'),
+                    report=report
+                )
+
+            except Exception as e:
+                logging.error(f"Error in generate_predictions: {str(e)}")
+                flash(f'Error processing file: {str(e)}')
+                return redirect(request.url)
+
         return render_template('generate_predictions.html',
-                               predictions=predictions_df.to_dict('records') if not predictions_df.empty else [])
-    except Exception as e:
-        logger.error(f"Error loading existing predictions: {str(e)}")
-        return render_template('generate_predictions.html', predictions=[])
+                               predictions=None,
+                               report=None)
 
+    @app.route('/logout')
+    @login_required
+    def logout():
+        logout_user()
+        flash('You have been logged out successfully')
+        return redirect(url_for('login'))
 
-@app.route('/logout')
-@login_required
-def logout():
-    logout_user()
-    return redirect(url_for('login'))
+    @app.errorhandler(404)
+    def page_not_found(e):
+        return render_template('404.html'), 404
 
+    @app.errorhandler(500)
+    def internal_server_error(e):
+        return render_template('500.html'), 500
 
-@app.errorhandler(404)
-def page_not_found(e):
-    return render_template('404.html'), 404
-
-
-@app.errorhandler(500)
-def internal_server_error(e):
-    return render_template('500.html'), 500
+    return app
 
 
 if __name__ == '__main__':
+    app = create_app()
     app.run(debug=True)

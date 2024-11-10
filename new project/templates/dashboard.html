@@ -1,10 +1,11 @@
+<!-- templates/dashboard.html -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AML Transaction Monitoring - Dashboard</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='/dashboard.css') }}">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
@@ -19,46 +20,72 @@
         </nav>
 
         <div class="content">
-            <h1>Dashboard</h1>
-
-            {% with messages = get_flashed_messages() %}
-                {% if messages %}
-                    {% for message in messages %}
-                        <div class="alert alert-warning">
-                            {{ message }}
-                        </div>
-                    {% endfor %}
-                {% endif %}
-            {% endwith %}
+            <h1>Risk Analysis Dashboard</h1>
 
             <!-- Summary Cards -->
             <div class="summary-section">
                 <div class="summary-card">
                     <h3>Total Alerts</h3>
-                    <p class="summary-value">{{ summary.get('total_alerts', 0) }}</p>
+                    <div class="summary-value">{{ summary.total_alerts }}</div>
+                    <div class="summary-label">Total Alerts Generated</div>
                 </div>
-                <div class="summary-card">
-                    <h3>High Risk Alerts</h3>
-                    <p class="summary-value">{{ summary.get('high_risk_count', 0) }}</p>
+                <div class="summary-card high-risk">
+                    <h3>High Risk Cases</h3>
+                    <div class="summary-value">{{ summary.high_risk_count }}</div>
+                    <div class="summary-label">Critical Alerts</div>
                 </div>
                 <div class="summary-card">
                     <h3>Total Amount</h3>
-                    <p class="summary-value">${{ "{:,.2f}".format(summary.get('total_amount', 0)) }}</p>
+                    <div class="summary-value">${{ "{:,.2f}".format(summary.total_amount) }}</div>
+                    <div class="summary-label">Value at Risk</div>
                 </div>
                 <div class="summary-card">
-                    <h3>Recent Alerts (24h)</h3>
-                    <p class="summary-value">{{ summary.get('recent_alerts', 0) }}</p>
+                    <h3>Recent Alerts</h3>
+                    <div class="summary-value">{{ summary.recent_alerts }}</div>
+                    <div class="summary-label">Last 24 Hours</div>
+                </div>
+            </div>
+
+            <!-- Charts Section -->
+            <div class="charts-section">
+                <!-- Model Performance -->
+                <div class="chart-container">
+                    <h2>Model Performance</h2>
+                    <canvas id="modelPerformanceChart"></canvas>
+                </div>
+
+                <!-- Risk Distribution -->
+                <div class="chart-container">
+                    <h2>Risk Distribution</h2>
+                    <canvas id="riskDistributionChart"></canvas>
+                </div>
+
+                <!-- Alert Trend -->
+                <div class="chart-container">
+                    <h2>Alert Trend (7 Days)</h2>
+                    <canvas id="trendChart"></canvas>
                 </div>
             </div>
 
             <!-- Recent Alerts Table -->
-            <div class="alerts-section">
-                <h2>Recent Alerts</h2>
+            <div class="card">
+                <div class="card-header">
+                    <h2>Recent Alerts</h2>
+                    <div class="alert-filters">
+                        <select id="riskFilter">
+                            <option value="all">All Risks</option>
+                            <option value="high">High Risk</option>
+                            <option value="medium">Medium Risk</option>
+                            <option value="low">Low Risk</option>
+                        </select>
+                    </div>
+                </div>
+
                 <div class="table-responsive">
-                    <table>
+                    <table id="alertsTable">
                         <thead>
                             <tr>
-                                <th>Timestamp</th>
+                                <th>Alert Date</th>
                                 <th>From Bank</th>
                                 <th>To Bank</th>
                                 <th>Amount</th>
@@ -68,112 +95,138 @@
                         </thead>
                         <tbody>
                             {% for alert in alerts %}
-                                <tr class="{% if alert.get('risk_score', 0) > 0.8 %}high-risk{% elif alert.get('risk_score', 0) > 0.6 %}medium-risk{% endif %}">
-                                    <td>{{ alert.get('Timestamp', '') }}</td>
-                                    <td>{{ alert.get('From Bank', '') }}</td>
-                                    <td>{{ alert.get('To Bank', '') }}</td>
-                                    <td>${{ "{:,.2f}".format(alert.get('Amount', 0)) }}</td>
-                                    <td>{{ "{:.2f}".format(alert.get('risk_score', 0)) }}</td>
-                                    <td>
-                                        <span class="status-badge {% if alert.get('risk_score', 0) > 0.8 %}high-risk{% elif alert.get('risk_score', 0) > 0.6 %}medium-risk{% else %}low-risk{% endif %}">
-                                            {% if alert.get('risk_score', 0) > 0.8 %}
-                                                High Risk
-                                            {% elif alert.get('risk_score', 0) > 0.6 %}
-                                                Medium Risk
-                                            {% else %}
-                                                Low Risk
-                                            {% endif %}
-                                        </span>
-                                    </td>
-                                </tr>
+                            <tr class="risk-{{ alert.alert_type|lower|replace(' ', '-') }}">
+                                <td>{{ alert.alert_date }}</td>
+                                <td>{{ alert.get('From Bank', 'N/A') }}</td>
+                                <td>{{ alert.get('To Bank', 'N/A') }}</td>
+                                <td>${{ "{:,.2f}".format(alert.Amount) }}</td>
+                                <td>{{ "%.3f"|format(alert.risk_score) }}</td>
+                                <td>
+                                    <span class="status-badge {{ alert.alert_type|lower|replace(' ', '-') }}">
+                                        {{ alert.alert_type }}
+                                    </span>
+                                </td>
+                            </tr>
                             {% endfor %}
                         </tbody>
                     </table>
-                </div>
-            </div>
-
-            <!-- Charts Section -->
-            <div class="charts-section">
-                <div class="chart-container">
-                    <h2>Model Performance</h2>
-                    <canvas id="modelPerformanceChart"></canvas>
-                </div>
-                <div class="chart-container">
-                    <h2>Risk Distribution</h2>
-                    <canvas id="riskDistributionChart"></canvas>
-                </div>
-                <div class="chart-container">
-                    <h2>Alert Trends</h2>
-                    <canvas id="trendChart"></canvas>
                 </div>
             </div>
         </div>
     </div>
 
     <script>
-        // Model Performance Chart
-        const modelPerformanceData = {{ model_performance|tojson|safe }};
-        new Chart(document.getElementById('modelPerformanceChart'), {
-            type: 'bar',
-            data: {
-                labels: modelPerformanceData.labels,
-                datasets: [{
-                    label: 'Model Performance Score',
-                    data: modelPerformanceData.scores,
-                    backgroundColor: 'rgba(54, 162, 235, 0.6)',
-                    borderColor: 'rgba(54, 162, 235, 1)',
-                    borderWidth: 1
-                }]
-            },
-            options: {
-                scales: {
-                    y: {
-                        beginAtZero: true,
-                        max: 1
+        // Initialize chart data
+        const chartData = {
+            modelPerformance: {{ model_performance|tojson|safe }},
+            riskDistribution: {{ risk_distribution|tojson|safe }},
+            trendData: {{ trend_data|tojson|safe }}
+        };
+
+        // Initialize dashboard charts
+        document.addEventListener('DOMContentLoaded', function() {
+            // Model Performance Chart
+            new Chart(document.getElementById('modelPerformanceChart'), {
+                type: 'bar',
+                data: {
+                    labels: chartData.modelPerformance.labels,
+                    datasets: [{
+                        label: 'Model Score',
+                        data: chartData.modelPerformance.scores,
+                        backgroundColor: 'rgba(59, 130, 246, 0.8)'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: {
+                            display: false
+                        },
+                        title: {
+                            display: true,
+                            text: 'Model Performance by Type'
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            max: 1
+                        }
                     }
                 }
-            }
-        });
+            });
 
-        // Risk Distribution Chart
-        const riskDistributionData = {{ risk_distribution|tojson|safe }};
-        new Chart(document.getElementById('riskDistributionChart'), {
-            type: 'pie',
-            data: {
-                labels: riskDistributionData.labels,
-                datasets: [{
-                    data: riskDistributionData.values,
-                    backgroundColor: [
-                        'rgba(255, 99, 132, 0.6)',
-                        'rgba(255, 206, 86, 0.6)',
-                        'rgba(75, 192, 192, 0.6)'
-                    ]
-                }]
-            }
-        });
-
-        // Trend Chart
-        const trendData = {{ trend_data|tojson|safe }};
-        new Chart(document.getElementById('trendChart'), {
-            type: 'line',
-            data: {
-                labels: trendData.dates,
-                datasets: [{
-                    label: 'Daily Alerts',
-                    data: trendData.counts,
-                    borderColor: 'rgba(75, 192, 192, 1)',
-                    tension: 0.1,
-                    fill: false
-                }]
-            },
-            options: {
-                scales: {
-                    y: {
-                        beginAtZero: true
+            // Risk Distribution Chart
+            new Chart(document.getElementById('riskDistributionChart'), {
+                type: 'pie',
+                data: {
+                    labels: chartData.riskDistribution.labels,
+                    datasets: [{
+                        data: chartData.riskDistribution.values,
+                        backgroundColor: [
+                            'rgba(239, 68, 68, 0.8)',
+                            'rgba(245, 158, 11, 0.8)',
+                            'rgba(34, 197, 94, 0.8)'
+                        ]
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: {
+                            position: 'bottom'
+                        }
                     }
                 }
-            }
+            });
+
+            // Alert Trend Chart
+            new Chart(document.getElementById('trendChart'), {
+                type: 'line',
+                data: {
+                    labels: chartData.trendData.dates,
+                    datasets: [{
+                        label: 'Daily Alerts',
+                        data: chartData.trendData.counts,
+                        borderColor: 'rgb(59, 130, 246)',
+                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                        fill: true
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: {
+                            display: false
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: {
+                                stepSize: 1
+                            }
+                        }
+                    }
+                }
+            });
+        });
+
+        // Initialize table filtering
+        document.getElementById('riskFilter').addEventListener('change', function(e) {
+            const risk = e.target.value;
+            const rows = document.querySelectorAll('#alertsTable tbody tr');
+
+            rows.forEach(row => {
+                if (risk === 'all' || row.classList.contains(`risk-${risk}`)) {
+                    row.style.display = '';
+                } else {
+                    row.style.display = 'none';
+                }
+            });
         });
     </script>
+
+    <script src="{{ url_for('static', filename='/dashboard.js') }}"></script>
 </body>
 </html>

@@ -1,4 +1,4 @@
-# models/enhanced_model.py
+# model_train.py
 
 import numpy as np
 import pandas as pd
@@ -9,161 +9,126 @@ from sklearn.decomposition import PCA
 from sklearn.cluster import DBSCAN
 import joblib
 import os
-from typing import Tuple, Dict, List, Optional
 import logging
 from datetime import datetime
+from typing import Tuple, Dict, Optional
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-class EnhancedUnsupervisedDetector:
-    """
-    Enhanced unsupervised fraud detection using multiple models
-    and ensemble techniques
-    """
+class MultiModelAMLDetector:
+    """Enhanced AML detection using multiple models and ensemble techniques."""
 
     def __init__(self,
                  contamination: float = 0.1,
                  random_state: int = 42,
-                 n_estimators: int = 100,
-                 n_neighbors: int = 20):
-        """
-        Initialize the enhanced detector with multiple models
-
-        Args:
-            contamination: Expected proportion of outliers in the data
-            random_state: Random seed for reproducibility
-            n_estimators: Number of trees in Isolation Forest
-            n_neighbors: Number of neighbors for LOF
-        """
-        # Initialize multiple detection models
+                 n_estimators: int = 100):
+        """Initialize detector with multiple models"""
         self.isolation_forest1 = IsolationForest(
             contamination=contamination,
-            random_state=random_state,
             n_estimators=n_estimators,
+            random_state=random_state,
             max_samples='auto'
         )
 
-        self.isolation_forest2 = IsolationForest(
+        self.lof_model = LocalOutlierFactor(
             contamination=contamination,
-            random_state=random_state + 1,
-            n_estimators=n_estimators,
-            max_samples=256
-        )
-
-        self.lof = LocalOutlierFactor(
-            n_neighbors=n_neighbors,
-            contamination=contamination,
+            n_neighbors=20,
             novelty=True
         )
 
-        self.dbscan = DBSCAN(
+        self.dbscan_model = DBSCAN(
             eps=0.5,
             min_samples=5,
             n_jobs=-1
         )
 
-        # Initialize preprocessing components
         self.scaler = StandardScaler()
         self.pca = PCA(n_components=0.95)
         self.fitted = False
+        self.weights = {
+            'iforest': 0.4,
+            'lof': 0.35,
+            'dbscan': 0.25
+        }
 
-    def preprocess_data(self, df: pd.DataFrame) -> np.ndarray:
-        """
-        Preprocess the data including feature engineering
-
-        Args:
-            df: Input DataFrame
-
-        Returns:
-            Processed features as numpy array
-        """
-        # Extract basic features
+    def _engineer_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Create features for AML detection"""
         features = pd.DataFrame()
 
-        # Amount-based features
-        features['amount_received'] = pd.to_numeric(df['Amount Received'], errors='coerce')
-        features['amount_paid'] = pd.to_numeric(df['Amount Paid'], errors='coerce')
-        features['amount_diff'] = features['amount_paid'] - features['amount_received']
-        features['amount_ratio'] = features['amount_paid'] / features['amount_received'].replace(0, 1)
+        # Amount features - handle different possible column names
+        amount_col = None
+        for possible_col in ['Amount', 'grid_3x3Amount Received', 'Amount Received']:
+            if possible_col in df.columns:
+                amount_col = possible_col
+                break
 
-        # Time-based features
+        if amount_col is None:
+            raise ValueError("No amount column found in the dataset")
+
+        # Process amount features
+        features['amount'] = pd.to_numeric(df[amount_col], errors='coerce')
+        features['amount_log'] = np.log1p(features['amount'])
+
+        # Temporal features
         timestamps = pd.to_datetime(df['Timestamp'])
         features['hour'] = timestamps.dt.hour
         features['day_of_week'] = timestamps.dt.dayofweek
         features['is_weekend'] = timestamps.dt.dayofweek.isin([5, 6]).astype(int)
+        features['is_business_hours'] = ((timestamps.dt.hour >= 9) &
+                                         (timestamps.dt.hour <= 17)).astype(int)
 
         # Bank relationship features
         features['same_bank'] = (df['From Bank'] == df['To Bank']).astype(int)
 
-        # Currency features
-        features['same_currency'] = (
-                df['text_formatReceiving Currency'] == df['text_formatPayment Currency']
-        ).astype(int)
+        # Bank frequency features
+        features['from_bank_freq'] = df['From Bank'].map(df['From Bank'].value_counts())
+        features['to_bank_freq'] = df['To Bank'].map(df['To Bank'].value_counts())
 
-        # Encode categorical variables
-        categorical_features = [
-            'From Bank', 'To Bank',
-            'text_formatReceiving Currency',
-            'text_formatPayment Currency',
-            'text_formatPayment Format'
-        ]
+        # Amount statistics by bank
+        features['bank_avg_amount'] = df.groupby('From Bank')[amount_col].transform('mean')
+        features['amount_to_avg_ratio'] = features['amount'] / features['bank_avg_amount'].fillna(1)
 
-        for feature in categorical_features:
-            dummies = pd.get_dummies(df[feature], prefix=feature)
-            features = pd.concat([features, dummies], axis=1)
+        # Encode categorical features
+        categorical_cols = ['From Bank', 'To Bank', 'Currency']
+        for col in categorical_cols:
+            if col in df.columns:
+                dummies = pd.get_dummies(df[col], prefix=col)
+                features = pd.concat([features, dummies], axis=1)
 
-        # Fill missing values and scale
+        # Handle missing values
         features = features.fillna(0)
-        if not self.fitted:
-            features_scaled = self.scaler.fit_transform(features)
-            self.feature_names = features.columns
-        else:
-            features_scaled = self.scaler.transform(features)
 
-        return features_scaled
+        return features
 
-    def fit(self, df: pd.DataFrame) -> 'EnhancedUnsupervisedDetector':
-        """
-        Fit all models in the ensemble
-
-        Args:
-            df: Input DataFrame
-
-        Returns:
-            Self for method chaining
-        """
-        logger.info("Starting model training...")
-
+    def fit(self, df: pd.DataFrame) -> 'MultiModelAMLDetector':
+        """Fit all models in the ensemble"""
         try:
-            # Preprocess data
-            X = self.preprocess_data(df)
+            logger.info("Starting model training...")
 
-            # Apply PCA if not fitted
-            if not self.fitted:
-                X_reduced = self.pca.fit_transform(X)
-                logger.info(
-                    f"Retained {self.pca.n_components_} components explaining {self.pca.explained_variance_ratio_.sum():.2%} variance")
-            else:
-                X_reduced = self.pca.transform(X)
+            # Engineer features
+            features = self._engineer_features(df)
 
-            # Fit all models
-            logger.info("Fitting Isolation Forest 1...")
-            self.isolation_forest1.fit(X_reduced)
+            # Scale features
+            X_scaled = self.scaler.fit_transform(features)
 
-            logger.info("Fitting Isolation Forest 2...")
-            self.isolation_forest2.fit(X_reduced)
+            # Apply PCA
+            X_pca = self.pca.fit_transform(X_scaled)
+            logger.info(f"PCA explains {self.pca.explained_variance_ratio_.sum():.2%} of variance")
 
-            logger.info("Fitting LOF...")
-            self.lof.fit(X_reduced)
+            # Fit models
+            logger.info("Training Isolation Forest...")
+            self.isolation_forest1.fit(X_pca)
 
-            logger.info("Fitting DBSCAN...")
-            self.dbscan.fit(X_reduced)
+            logger.info("Training LOF...")
+            self.lof_model.fit(X_pca)
+
+            logger.info("Training DBSCAN...")
+            self.dbscan_model.fit(X_pca)
 
             self.fitted = True
             logger.info("Model training completed successfully")
-
             return self
 
         except Exception as e:
@@ -171,48 +136,80 @@ class EnhancedUnsupervisedDetector:
             raise
 
     def predict(self, df: pd.DataFrame) -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
-        """
-        Generate predictions using the ensemble of models
-
-        Args:
-            df: Input DataFrame
-
-        Returns:
-            Tuple of (ensemble predictions, individual model scores)
-        """
+        """Generate predictions using model ensemble"""
         if not self.fitted:
             raise ValueError("Models must be fitted before prediction")
 
-        # Preprocess data
-        X = self.preprocess_data(df)
-        X_reduced = self.pca.transform(X)
+        try:
+            # Prepare features
+            features = self._engineer_features(df)
+            X_scaled = self.scaler.transform(features)
+            X_pca = self.pca.transform(X_scaled)
 
-        # Get predictions from each model
-        scores = {
-            'iforest1': self.isolation_forest1.score_samples(X_reduced),
-            'iforest2': self.isolation_forest2.score_samples(X_reduced),
-            'lof': -self.lof.score_samples(X_reduced),  # Negative for consistency
-            'dbscan': np.where(self.dbscan.fit_predict(X_reduced) == -1, -1, 1)
-        }
+            # Get individual model scores
+            scores = {
+                'iforest': -self.isolation_forest1.score_samples(X_pca),  # Negative for consistency
+                'lof': -self.lof_model.score_samples(X_pca),
+                'dbscan': self.dbscan_model.fit_predict(X_pca)
+            }
 
-        # Combine predictions (weighted average)
-        weights = {
-            'iforest1': 0.3,
-            'iforest2': 0.3,
-            'lof': 0.25,
-            'dbscan': 0.15
-        }
+            # Convert DBSCAN predictions to scores
+            scores['dbscan'] = np.where(scores['dbscan'] == -1, 1, -1)
 
-        ensemble_scores = sum(score * weights[model] for model, score in scores.items())
+            # Calculate weighted ensemble score
+            ensemble_scores = np.zeros(len(X_pca))
+            for model, weight in self.weights.items():
+                ensemble_scores += weight * scores[model]
 
-        # Convert to binary predictions (-1 for anomaly, 1 for normal)
-        threshold = np.percentile(ensemble_scores, 90)  # Adjustable threshold
-        predictions = np.where(ensemble_scores < threshold, -1, 1)
+            # Normalize scores to [0, 1] range
+            ensemble_scores = (ensemble_scores - ensemble_scores.min()) / (
+                        ensemble_scores.max() - ensemble_scores.min())
 
-        return predictions, scores
+            return ensemble_scores, scores
+
+        except Exception as e:
+            logger.error(f"Error during prediction: {str(e)}")
+            raise
+
+    def generate_report(self, df: pd.DataFrame, predictions: np.ndarray, scores: Dict[str, np.ndarray]) -> Dict:
+        """Generate detailed analysis report"""
+        try:
+            high_risk_mask = predictions > 0.7
+            amount_col = [col for col in df.columns if 'amount' in col.lower() or 'Amount' in col][0]
+
+            report = {
+                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'total_transactions': len(df),
+                'high_risk_count': sum(high_risk_mask),
+                'risk_stats': {
+                    'mean': predictions.mean(),
+                    'median': np.median(predictions),
+                    'std': predictions.std()
+                },
+                'model_contributions': {
+                    model: {
+                        'mean_score': score.mean(),
+                        'correlation': np.corrcoef(predictions, score)[0, 1]
+                    }
+                    for model, score in scores.items()
+                },
+                'high_risk_summary': {
+                    'amount_stats': df.loc[high_risk_mask, amount_col].describe().to_dict(),
+                    'top_banks': {
+                        'from': df.loc[high_risk_mask, 'From Bank'].value_counts().head(5).to_dict(),
+                        'to': df.loc[high_risk_mask, 'To Bank'].value_counts().head(5).to_dict()
+                    }
+                }
+            }
+
+            return report
+
+        except Exception as e:
+            logger.error(f"Error generating report: {str(e)}")
+            raise
 
     def save(self, filepath: str):
-        """Save the trained model"""
+        """Save trained model"""
         if not self.fitted:
             raise ValueError("Model must be trained before saving")
 
@@ -221,8 +218,8 @@ class EnhancedUnsupervisedDetector:
         logger.info(f"Model saved to {filepath}")
 
     @classmethod
-    def load(cls, filepath: str) -> 'EnhancedUnsupervisedDetector':
-        """Load a trained model"""
+    def load(cls, filepath: str) -> 'MultiModelAMLDetector':
+        """Load trained model"""
         if not os.path.exists(filepath):
             raise FileNotFoundError(f"Model file not found: {filepath}")
 
@@ -231,70 +228,37 @@ class EnhancedUnsupervisedDetector:
         return model
 
 
-def generate_evaluation_report(predictions: np.ndarray, scores: Dict[str, np.ndarray], df: pd.DataFrame) -> Dict:
-    """
-    Generate a detailed evaluation report
-
-    Args:
-        predictions: Binary predictions from the ensemble
-        scores: Dictionary of scores from individual models
-        df: Original DataFrame
-
-    Returns:
-        Dictionary containing evaluation metrics and summaries
-    """
-    n_samples = len(predictions)
-    n_anomalies = (predictions == -1).sum()
-
-    report = {
-        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        'total_transactions': n_samples,
-        'flagged_transactions': n_anomalies,
-        'anomaly_rate': n_anomalies / n_samples,
-        'model_correlations': {},
-        'high_risk_examples': []
-    }
-
-    # Calculate correlations between model scores
-    score_df = pd.DataFrame(scores)
-    report['model_correlations'] = score_df.corr().to_dict()
-
-    # Get high risk examples
-    high_risk_idx = np.where(predictions == -1)[0]
-    for idx in high_risk_idx[:10]:  # Top 10 examples
-        risk_scores = {model: scores[model][idx] for model in scores.keys()}
-        report['high_risk_examples'].append({
-            'index': int(idx),
-            'timestamp': df.iloc[idx]['Timestamp'],
-            'amount_paid': float(df.iloc[idx]['Amount Paid']),
-            'risk_scores': risk_scores
-        })
-
-    return report
-
-
 if __name__ == "__main__":
-    # Example usage
-    DATA_PATH = "data/transactions.csv"
-    MODEL_PATH = "models/enhanced_detector.joblib"
+    try:
+        # Load training data
+        DATA_PATH = "data/transactions.csv"
+        MODEL_PATH = "models/aml_detector.joblib"
 
-    # Load data
-    df = pd.read_csv(DATA_PATH)
+        df = pd.read_csv(DATA_PATH)
+        logger.info(f"Loaded {len(df)} transactions for training")
 
-    # Create and train model
-    detector = EnhancedUnsupervisedDetector(contamination=0.1)
-    detector.fit(df)
+        # Print column names for debugging
+        logger.info(f"Available columns: {df.columns.tolist()}")
 
-    # Generate predictions
-    predictions, scores = detector.predict(df)
+        # Train model
+        detector = MultiModelAMLDetector(contamination=0.1)
+        detector.fit(df)
 
-    # Generate report
-    report = generate_evaluation_report(predictions, scores, df)
+        # Generate predictions
+        predictions, scores = detector.predict(df)
 
-    # Print summary
-    print("\nDetection Summary:")
-    print(f"Total Transactions: {report['total_transactions']}")
-    print(f"Flagged as Anomalous: {report['flagged_transactions']} ({report['anomaly_rate']:.2%})")
+        # Generate report
+        report = detector.generate_report(df, predictions, scores)
 
-    # Save model
-    detector.save(MODEL_PATH)
+        # Print summary
+        print("\nTraining Results:")
+        print(f"Total Transactions: {report['total_transactions']}")
+        print(f"High Risk Transactions: {report['high_risk_count']}")
+        print(f"Average Risk Score: {report['risk_stats']['mean']:.3f}")
+
+        # Save model
+        detector.save(MODEL_PATH)
+
+    except Exception as e:
+        logger.error(f"Error in training script: {str(e)}")
+        raise

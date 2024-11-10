@@ -1,0 +1,33 @@
+
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+  <property>
+    <name>hbase.rootdir</name>
+    <value>file:///hbase/data</value>
+  </property>
+
+  <property>
+    <name>hbase.zookeeper.quorum</name>
+    <value>localhost</value>
+  </property>
+
+  <property>
+    <name>hbase.cluster.distributed</name>
+    <value>false</value>
+  </property>
+
+  <property>
+    <name>hbase.unsafe.stream.capability.enforce</name>
+    <value>false</value>
+  </property>
+
+  <property>
+    <name>hbase.thrift.support.proxyuser</name>
+    <value>true</value>
+  </property>
+
+  <property>
+    <name>hbase.thrift.port</name>
+    <value>9090</value>
+  </property>
+</configuration>

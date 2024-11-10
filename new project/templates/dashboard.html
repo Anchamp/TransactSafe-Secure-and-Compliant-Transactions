@@ -1,4 +1,3 @@
-<!-- templates/dashboard.html -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -90,20 +89,20 @@
                                 <th>To Bank</th>
                                 <th>Amount</th>
                                 <th>Risk Score</th>
-                                <th>Status</th>
+                                <th>Risk Level</th>
                             </tr>
                         </thead>
                         <tbody>
                             {% for alert in alerts %}
-                            <tr class="risk-{{ alert.alert_type|lower|replace(' ', '-') }}">
-                                <td>{{ alert.alert_date }}</td>
+                            <tr class="risk-{{ alert.risk_level|lower|replace(' ', '-') if alert.risk_level is defined else 'unknown' }}">
+                                <td>{{ alert.alert_date if alert.alert_date is defined else 'N/A' }}</td>
                                 <td>{{ alert.get('From Bank', 'N/A') }}</td>
                                 <td>{{ alert.get('To Bank', 'N/A') }}</td>
-                                <td>${{ "{:,.2f}".format(alert.Amount) }}</td>
-                                <td>{{ "%.3f"|format(alert.risk_score) }}</td>
+                                <td>${{ "{:,.2f}".format(alert.Amount) if alert.Amount is defined else "0.00" }}</td>
+                                <td>{{ "{:.2%}".format(alert.risk_score) if alert.risk_score is defined else "N/A" }}</td>
                                 <td>
-                                    <span class="status-badge {{ alert.alert_type|lower|replace(' ', '-') }}">
-                                        {{ alert.alert_type }}
+                                    <span class="status-badge {{ alert.risk_level|lower|replace(' ', '-') if alert.risk_level is defined else 'unknown' }}">
+                                        {{ alert.get('risk_level', 'Unknown') }}
                                     </span>
                                 </td>
                             </tr>
@@ -164,9 +163,9 @@
                     datasets: [{
                         data: chartData.riskDistribution.values,
                         backgroundColor: [
-                            'rgba(239, 68, 68, 0.8)',
-                            'rgba(245, 158, 11, 0.8)',
-                            'rgba(34, 197, 94, 0.8)'
+                            'rgba(239, 68, 68, 0.8)',  // High Risk
+                            'rgba(245, 158, 11, 0.8)', // Medium Risk
+                            'rgba(34, 197, 94, 0.8)'   // Low Risk
                         ]
                     }]
                 },

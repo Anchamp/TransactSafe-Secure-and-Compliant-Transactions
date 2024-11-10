@@ -74,21 +74,45 @@
                                     <td>Yes</td>
                                 </tr>
                                 <tr>
+                                    <td>Account</td>
+                                    <td>String</td>
+                                    <td>ACC123456</td>
+                                    <td>Yes</td>
+                                </tr>
+                                <tr>
                                     <td>To Bank</td>
                                     <td>String</td>
                                     <td>Bank B</td>
                                     <td>Yes</td>
                                 </tr>
                                 <tr>
-                                    <td>Amount</td>
+                                    <td>Amount Received</td>
                                     <td>Number</td>
                                     <td>1000.00</td>
                                     <td>Yes</td>
                                 </tr>
                                 <tr>
-                                    <td>Currency</td>
+                                    <td>Receiving Currency</td>
                                     <td>String</td>
                                     <td>USD</td>
+                                    <td>Yes</td>
+                                </tr>
+                                <tr>
+                                    <td>Amount Paid</td>
+                                    <td>Number</td>
+                                    <td>1000.00</td>
+                                    <td>Yes</td>
+                                </tr>
+                                <tr>
+                                    <td>Payment Currency</td>
+                                    <td>String</td>
+                                    <td>USD</td>
+                                    <td>Yes</td>
+                                </tr>
+                                <tr>
+                                    <td>Payment Format</td>
+                                    <td>String</td>
+                                    <td>SWIFT</td>
                                     <td>Yes</td>
                                 </tr>
                             </tbody>
@@ -136,27 +160,41 @@
                                 <tr>
                                     <th>Timestamp</th>
                                     <th>From Bank</th>
+                                    <th>Account</th>
                                     <th>To Bank</th>
-                                    <th>Amount</th>
-                                    <th>Currency</th>
+                                    <th>Amount Received</th>
+                                    <th>Receiving Currency</th>
+                                    <th>Amount Paid</th>
+                                    <th>Payment Currency</th>
+                                    <th>Payment Format</th>
                                     <th>Risk Score</th>
                                     <th>Status</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {% for prediction in predictions %}
-                                <tr class="{% if prediction.get('risk_score', 0) > 0.85 %}high-risk{% elif prediction.get('risk_score', 0) > 0.7 %}medium-risk{% endif %}">
+                                <tr class="{% if prediction.get('risk_score', 0)|float > 0.85 %}high-risk{% elif prediction.get('risk_score', 0)|float > 0.7 %}medium-risk{% endif %}">
                                     <td>{{ prediction.get('Timestamp', 'N/A') }}</td>
                                     <td>{{ prediction.get('From Bank', 'N/A') }}</td>
+                                    <td>{{ prediction.get('Account', 'N/A') }}</td>
                                     <td>{{ prediction.get('To Bank', 'N/A') }}</td>
                                     <td>
-                                        {% if prediction.get('Amount') is not none %}
-                                            ${{ "{:,.2f}".format(prediction.Amount|float) }}
+                                        {% if prediction.get('Amount Received') is not none %}
+                                            ${{ "{:,.2f}".format(prediction['Amount Received']|float) }}
                                         {% else %}
                                             N/A
                                         {% endif %}
                                     </td>
-                                    <td>{{ prediction.get('Currency', 'N/A') }}</td>
+                                    <td>{{ prediction.get('Receiving Currency', 'N/A') }}</td>
+                                    <td>
+                                        {% if prediction.get('Amount Paid') is not none %}
+                                            ${{ "{:,.2f}".format(prediction['Amount Paid']|float) }}
+                                        {% else %}
+                                            N/A
+                                        {% endif %}
+                                    </td>
+                                    <td>{{ prediction.get('Payment Currency', 'N/A') }}</td>
+                                    <td>{{ prediction.get('Payment Format', 'N/A') }}</td>
                                     <td>
                                         {% if prediction.get('risk_score') is not none %}
                                             {{ "%.3f"|format(prediction.risk_score|float) }}

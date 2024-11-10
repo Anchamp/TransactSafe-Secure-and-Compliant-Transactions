@@ -309,3 +309,7 @@ tr:hover {
         padding: 0.75rem;
     }
 }
+.status-badge.unknown {
+    background-color: #e5e7eb;
+    color: #6b7280;
+}

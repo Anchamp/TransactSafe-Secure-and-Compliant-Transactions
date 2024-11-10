@@ -108,7 +108,7 @@ def create_app():
         return None
 
     def generate_dashboard_data():
-        """Generate data for dashboard visualization"""
+        """Generate data for dashboard visualization with proper amount handling"""
         default_data = {
             'alerts': [],
             'summary': {
@@ -140,6 +140,12 @@ def create_app():
             if alerts_df.empty:
                 return default_data
 
+            # Handle column names and ensure Amount column exists
+            if 'Amount Paid' in alerts_df.columns:
+                alerts_df['Amount'] = alerts_df['Amount Paid']
+            elif 'Amount' not in alerts_df.columns:
+                alerts_df['Amount'] = 0.0
+
             # Convert and clean data types
             alerts_df['alert_date'] = pd.to_datetime(alerts_df['alert_date'], errors='coerce')
             alerts_df['Amount'] = pd.to_numeric(alerts_df['Amount'], errors='coerce').fillna(0)
@@ -150,9 +156,11 @@ def create_app():
             recent_mask = alerts_df['alert_date'] > (now - timedelta(days=1))
 
             # Calculate risk levels
-            alerts_df['risk_level'] = 'Low Risk'
-            alerts_df.loc[alerts_df['risk_score'] > 0.7, 'risk_level'] = 'Medium Risk'
-            alerts_df.loc[alerts_df['risk_score'] > 0.85, 'risk_level'] = 'High Risk'
+            alerts_df['risk_level'] = pd.cut(
+                alerts_df['risk_score'],
+                bins=[-float('inf'), 0.7, 0.85, float('inf')],
+                labels=['Low Risk', 'Medium Risk', 'High Risk']
+            )
 
             risk_counts = alerts_df['risk_level'].value_counts()
 
@@ -162,7 +170,7 @@ def create_app():
                 alerts_df['alert_date'].dt.date
             ).size()
 
-            # Create date range for complete week
+            # Create complete date range
             date_range = pd.date_range(
                 start=last_week.date(),
                 end=now.date(),
@@ -170,23 +178,24 @@ def create_app():
             )
             daily_counts = daily_counts.reindex(date_range, fill_value=0)
 
-            # Prepare alerts for display
-            display_alerts = (
-                alerts_df.sort_values('alert_date', ascending=False)
-                .head(100)
-                .fillna('N/A')
-                .replace([np.inf, -np.inf], 0)
-            )
-
-            # Convert numeric columns to proper format
-            for alert in display_alerts.to_dict('records'):
-                if pd.notna(alert.get('Amount')):
-                    alert['Amount'] = float(alert['Amount'])
-                if pd.notna(alert.get('risk_score')):
-                    alert['risk_score'] = float(alert['risk_score'])
+            # Prepare alerts for display ensuring all required fields exist
+            display_alerts = []
+            for _, row in alerts_df.sort_values('alert_date', ascending=False).head(100).iterrows():
+                alert = {
+                    'Timestamp': row.get('Timestamp', 'N/A'),
+                    'From Bank': row.get('From Bank', 'N/A'),
+                    'To Bank': row.get('To Bank', 'N/A'),
+                    'Amount': float(row['Amount']),  # Already cleaned above
+                    'Currency': row.get('Currency', 'N/A'),
+                    'risk_score': float(row['risk_score']),  # Already cleaned above
+                    'alert_date': row['alert_date'].strftime('%Y-%m-%d %H:%M:%S') if pd.notnull(
+                        row['alert_date']) else 'N/A',
+                    'risk_level': row.get('risk_level', 'N/A')
+                }
+                display_alerts.append(alert)
 
             return {
-                'alerts': display_alerts.to_dict('records'),
+                'alerts': display_alerts,
                 'summary': {
                     'total_alerts': len(alerts_df),
                     'high_risk_count': int(sum(alerts_df['risk_score'] > 0.85)),
@@ -286,8 +295,10 @@ def create_app():
             flash('Error loading dashboard')
             return redirect(url_for('login'))
 
+
     @app.route('/generate_predictions', methods=['GET', 'POST'])
     @login_required
+
     def generate_predictions():
         if request.method == 'POST':
             if 'file' not in request.files:
@@ -300,43 +311,101 @@ def create_app():
                 return redirect(request.url)
 
             try:
-                df = pd.read_csv(file)
+                # Read CSV with proper type handling
+                df = pd.read_csv(file, low_memory=False)
+
+                # Define column mappings
+                column_mappings = {
+                    'Timestamp': 'Timestamp',
+                    'From Bank': 'From Bank',
+                    'To Bank': 'To Bank',
+                    'Amount': 'Amount Paid',  # Using Amount Paid as the main amount
+                    'Currency': 'Payment Currency'  # Using Payment Currency as the main currency
+                }
+
+                # Validate required columns using the actual column names
+                required_columns = {
+                    'Timestamp': 'Timestamp',
+                    'From Bank': 'From Bank',
+                    'To Bank': 'To Bank',
+                    'Amount Received': 'Amount Received',
+                    'Receiving Currency': 'Receiving Currency',
+                    'Amount Paid': 'Amount Paid',
+                    'Payment Currency': 'Payment Currency',
+                    'Payment Format': 'Payment Format'
+                }
+
+                missing_columns = [col for col in required_columns.values()
+                                   if col not in df.columns]
+
+                if missing_columns:
+                    flash(f'Missing required columns: {", ".join(missing_columns)}')
+                    return redirect(request.url)
+
+                # Clean and convert data types
+                df['Amount Paid'] = pd.to_numeric(df['Amount Paid'], errors='coerce').fillna(0)
+                df['Amount Received'] = pd.to_numeric(df['Amount Received'], errors='coerce').fillna(0)
+                df['Timestamp'] = pd.to_datetime(df['Timestamp'], errors='coerce')
+                df = df.fillna('N/A')
+
+                # Generate predictions
                 success, error_msg, predictions, report = model_manager.predict(df)
 
                 if not success:
                     flash(error_msg)
                     return redirect(request.url)
 
-                # Save alerts for high-risk transactions
+                # Add predictions and format data
+                df['risk_score'] = predictions
+                df['risk_level'] = 'Low Risk'
+                df.loc[df['risk_score'] > 0.7, 'risk_level'] = 'Medium Risk'
+                df.loc[df['risk_score'] > 0.85, 'risk_level'] = 'High Risk'
+
+                # Save high-risk alerts
                 high_risk_mask = predictions > 0.7
                 if high_risk_mask.any():
                     alerts_df = df[high_risk_mask].copy()
-                    alerts_df['risk_score'] = predictions[high_risk_mask]
                     alerts_df['alert_date'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    alerts_df['risk_score'] = alerts_df['risk_score'].astype(float)
+                    alerts_df['Amount Paid'] = alerts_df['Amount Paid'].astype(float)
 
                     mode = 'a' if os.path.exists(Config.ALERTS_FILE) else 'w'
-                    alerts_df.to_csv(Config.ALERTS_FILE,
-                                     mode=mode,
-                                     header=(mode == 'w'),
-                                     index=False)
+                    alerts_df.to_csv(
+                        Config.ALERTS_FILE,
+                        mode=mode,
+                        header=(mode == 'w'),
+                        index=False,
+                        float_format='%.3f'
+                    )
 
-                df['risk_score'] = predictions
+                # Prepare display data
+                display_data = df.head(1000).copy()
+                display_data['risk_score'] = display_data['risk_score'].astype(float)
+                display_data['Amount Paid'] = display_data['Amount Paid'].astype(float)
+                display_data['Amount Received'] = display_data['Amount Received'].astype(float)
+
+                # Format report
+                formatted_report = {
+                    'total_transactions': int(report['total_transactions']),
+                    'high_risk_count': int(report['high_risk_count']),
+                    'average_risk_score': float(report['average_risk_score'])
+                }
+
                 flash('Predictions generated successfully')
                 return render_template(
                     'generate_predictions.html',
-                    predictions=df.head(1000).to_dict('records'),
-                    report=report
+                    predictions=display_data.to_dict('records'),
+                    report=formatted_report
                 )
 
             except Exception as e:
-                logging.error(f"Error in generate_predictions: {str(e)}")
+                logging.error(f"Error processing file: {str(e)}\n{traceback.format_exc()}")
                 flash(f'Error processing file: {str(e)}')
                 return redirect(request.url)
 
         return render_template('generate_predictions.html',
                                predictions=None,
                                report=None)
-
     @app.route('/logout')
     @login_required
     def logout():

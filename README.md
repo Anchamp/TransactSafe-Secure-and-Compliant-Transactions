@@ -1,5 +1,5 @@
-##TransactSafe –Secure and Compliant Transactions
-## Overview
+
+## TransactSafe –Secure and Compliant Transactions
 A robust Anti-Money Laundering (AML) transaction monitoring system built with Flask, machine learning, and HBase. The system provides real-time analysis of financial transactions to detect suspicious patterns and potential money laundering activities.
 
 ## Features

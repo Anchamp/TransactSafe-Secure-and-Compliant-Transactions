@@ -21,4 +21,10 @@ A robust Anti-Money Laundering (AML) transaction monitoring system built with Fl
 - **Frontend**: HTML, CSS, JavaScript
 - **Message Queue**: Apache Kafka
 - **Containerization**: Docker
+##Requirements
 
+-Python 3.8+
+-HBase 2.x
+-Apache Kafka
+-Docker and Docker Compose
+-Required Python packages listed in requirements.txt
